@@ -13,7 +13,7 @@ use futures::stream::{self, FuturesUnordered};
 use futures::{select, FutureExt, StreamExt};
 use parking_lot::Mutex;
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::{pending, ready, Future};
 use std::mem;
 use std::pin::{pin, Pin};
@@ -27,7 +27,7 @@ use subspace_farmer::cluster::farmer::{
 };
 use subspace_farmer::cluster::nats_client::NatsClient;
 use subspace_farmer::farm::plotted_pieces::PlottedPieces;
-use subspace_farmer::farm::{Farm, FarmId, SectorPlottingDetails, SectorUpdate};
+use subspace_farmer::farm::{Farm, FarmId, FarmerId, SectorPlottingDetails, SectorUpdate};
 use tokio::task;
 use tokio::time::MissedTickBehavior;
 use tracing::{debug, error, info, trace, warn};
@@ -37,9 +37,11 @@ type AddRemoveFuture<'a> =
 
 #[derive(Debug)]
 struct KnownFarmer {
-    farmer_id: FarmId,
+    farmer_id: FarmerId,
     fingerprint: Blake3Hash,
     last_identification: Instant,
+    expired_sender: oneshot::Sender<()>,
+    known_farms: HashMap<FarmIndex, KnownFarm>,
 }
 
 #[derive(Debug)]
@@ -48,6 +50,12 @@ struct KnownFarm {
     fingerprint: Blake3Hash,
     last_identification: Instant,
     expired_sender: oneshot::Sender<()>,
+}
+
+enum KnownFarmerInsertResult {
+    Inserted,
+    FingerprintUpdated,
+    NotInserted,
 }
 
 enum KnownFarmInsertResult {
@@ -69,18 +77,18 @@ struct KnownFarms {
 }
 
 impl KnownFarms {
-    fn update_farmer(&mut self, farmer_id: FarmId, fingerprint: Blake3Hash) -> bool {
+    fn update_farmer(&mut self, farmer_id: FarmerId, fingerprint: Blake3Hash) -> bool {
         let last_identification = Instant::now();
         if self.known_farmers.iter_mut().any(|known_farmer| {
             if known_farmer.farmer_id == farmer_id && known_farmer.fingerprint == fingerprint {
                 known_farmer.last_identification = last_identification;
-                self.known_farms.iter_mut().for_each(|(_, known_farm)| {
-                    // All farms in farmer use the same fingerprint
-                    if known_farm.fingerprint == fingerprint {
+                known_farmer
+                    .known_farms
+                    .iter_mut()
+                    .for_each(|(_, known_farm)| {
                         debug!(farm_id = %known_farm.farm_id, "Updating last identification for farm");
                         known_farm.last_identification = last_identification;
-                    }
-                });
+                    });
                 true
             } else {
                 false
@@ -89,12 +97,106 @@ impl KnownFarms {
             return false;
         }
 
-        self.known_farmers.push(KnownFarmer {
-            farmer_id,
-            fingerprint,
-            last_identification,
-        });
+        // TODO: Implement farmer identification
+        // self.known_farmers.push(KnownFarmer {
+        //     farmer_id,
+        //     fingerprint,
+        //     last_identification,
+        // });
         true
+    }
+
+    fn insert_or_update_farmer(
+        &mut self,
+        farmer_id: FarmerId,
+        fingerprint: Blake3Hash,
+    ) -> KnownFarmInsertResult {
+        let last_identification = Instant::now();
+        if let Some(existing_result) = self.known_farmers.iter_mut().find_map(|known_farmer| {
+            if known_farmer.farmer_id == farmer_id {
+                if known_farmer.fingerprint == fingerprint {
+                    known_farmer.last_identification = last_identification;
+                    // TODO: remove this block
+                    // known_farmer
+                    //     .known_farms
+                    //     .iter_mut()
+                    //     .for_each(|(_, known_farm)| {
+                    //         debug!(farm_id = %known_farm.farm_id, "Updating last identification for farm");
+                    //         known_farm.last_identification = last_identification;
+                    //     });
+                    Some(KnownFarmerInsertResult::NotInserted)
+                } else {
+                    Some(KnownFarmerInsertResult::FingerprintUpdated)
+                }
+            } else {
+                None
+            }
+        }) {
+            return existing_result;
+        }
+
+        let known_farm_indices = self
+            .known_farmers
+            .iter_mut()
+            .flat_map(|known_farmer| known_farmer.known_farms.keys())
+            .collect::<HashSet<_>>();
+        for farm_index in FarmIndex::MIN..=FarmIndex::MAX {
+            if !known_farm_indices.contains(&farm_index) {
+                // if let Entry::Vacant(entry) = self.known_farms.entry(farm_index) {
+                //     let (expired_sender, expired_receiver) = oneshot::channel();
+
+                //     entry.insert(KnownFarm {
+                //         farm_id,
+                //         fingerprint,
+                //         last_identification,
+                //         expired_sender,
+                //     });
+
+                //     return KnownFarmInsertResult::Inserted {
+                //         farm_index,
+                //         expired_receiver,
+                //     };
+                // }
+            }
+
+            if let Entry::Vacant(entry) = known_farms.entry(&farm_index) {
+                let (expired_sender, expired_receiver) = oneshot::channel();
+
+                entry.insert(KnownFarm {
+                    farm_id,
+                    fingerprint,
+                    last_identification: Instant::now(),
+                    expired_sender,
+                });
+
+                return KnownFarmInsertResult::Inserted {
+                    farm_index,
+                    expired_receiver,
+                };
+            }
+        }
+
+        // TODO: Implement farmer identification
+        for farm_index in FarmIndex::MIN..=FarmIndex::MAX {
+            if let Entry::Vacant(entry) = self.known_farms.entry(farm_index) {
+                let (expired_sender, expired_receiver) = oneshot::channel();
+
+                entry.insert(KnownFarm {
+                    farm_id,
+                    fingerprint,
+                    last_identification: Instant::now(),
+                    expired_sender,
+                });
+
+                return KnownFarmInsertResult::Inserted {
+                    farm_index,
+                    expired_receiver,
+                };
+            }
+        }
+
+        warn!(%farm_id, max_supported_farm_index = %FarmIndex::MAX, "Too many farms, ignoring");
+        KnownFarmInsertResult::NotInserted
     }
 
     fn insert_or_update(
@@ -247,19 +349,6 @@ pub(super) async fn maintain_farms(
                     }
                 }
             }
-            maybe_identify_message = farm_identify_subscription.next() => {
-                let Some(identify_message) = maybe_identify_message else {
-                    return Err(anyhow!("Farm identify stream ended"));
-                };
-
-                process_farm_identify_message(
-                    identify_message,
-                    nats_client,
-                    &mut known_farms,
-                    &mut farms_to_add_remove,
-                    plotted_pieces,
-                );
-            }
             maybe_identify_message = farmer_identify_subscription.next() => {
                 let Some(identify_message) = maybe_identify_message else {
                     return Err(anyhow!("Farmer identify stream ended"));
@@ -338,7 +427,6 @@ async fn process_farmer_identify_message<'a>(
 ) {
     let ClusterFarmerIdentifyBroadcast {
         farmer_id,
-        farms_count,
         fingerprint,
     } = identify_message;
 
@@ -348,7 +436,6 @@ async fn process_farmer_identify_message<'a>(
         return;
     };
 
-    let farm_ids = farmer_id.derive_sub_ids(farms_count.into());
     match nats_client
         .stream_request(
             ClusterFarmerFarmDetailsRequest,
@@ -357,10 +444,9 @@ async fn process_farmer_identify_message<'a>(
         .await
     {
         Ok(farms_details) => {
-            let mut farms_details = farms_details.zip(stream::iter(farm_ids));
-            while let Some((farm_details, farm_id)) = farms_details.next().await {
+            while let Some(farm_details) = farms_details.next().await {
                 let farm_identify_message = ClusterFarmerIdentifyFarmBroadcast {
-                    farm_id,
+                    farm_id: farm_details.farm_id,
                     total_sectors_count: farm_details.total_sectors_count,
                     fingerprint,
                 };

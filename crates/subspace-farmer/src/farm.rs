@@ -28,8 +28,6 @@ use thiserror::Error;
 use ulid::Ulid;
 
 pub mod plotted_pieces;
-#[cfg(test)]
-mod tests;
 
 /// Erased error type
 pub type FarmError = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -53,8 +51,64 @@ pub trait PlottedSectors: Send + Sync + fmt::Debug {
     Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Serialize, Deserialize, Display, From,
 )]
 #[serde(untagged)]
-pub enum PieceCacheId {
+pub enum CacheId {
     /// Cache ID
+    Ulid(Ulid),
+}
+
+impl Encode for CacheId {
+    #[inline]
+    fn size_hint(&self) -> usize {
+        1_usize
+            + match self {
+                CacheId::Ulid(ulid) => 0_usize.saturating_add(Encode::size_hint(&ulid.0)),
+            }
+    }
+
+    #[inline]
+    fn encode_to<O: Output + ?Sized>(&self, output: &mut O) {
+        match self {
+            CacheId::Ulid(ulid) => {
+                output.push_byte(0);
+                Encode::encode_to(&ulid.0, output);
+            }
+        }
+    }
+}
+
+impl EncodeLike for CacheId {}
+
+impl Decode for CacheId {
+    #[inline]
+    fn decode<I: Input>(input: &mut I) -> Result<Self, parity_scale_codec::Error> {
+        match input
+            .read_byte()
+            .map_err(|e| e.chain("Could not decode `CacheId`, failed to read variant byte"))?
+        {
+            0 => u128::decode(input)
+                .map(|ulid| CacheId::Ulid(Ulid(ulid)))
+                .map_err(|e| e.chain("Could not decode `CacheId::Ulid.0`")),
+            _ => Err("Could not decode `CacheId`, variant doesn't exist".into()),
+        }
+    }
+}
+
+#[allow(clippy::new_without_default)]
+impl CacheId {
+    /// Creates new ID
+    #[inline]
+    pub fn new() -> Self {
+        Self::Ulid(Ulid::new())
+    }
+}
+
+/// An identifier for a piece cache, can be used for in logs, thread names, etc.
+#[derive(
+    Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Serialize, Deserialize, Display, From,
+)]
+#[serde(untagged)]
+pub enum PieceCacheId {
+    /// Piece Cache ID
     Ulid(Ulid),
 }
 
@@ -85,12 +139,12 @@ impl Decode for PieceCacheId {
     fn decode<I: Input>(input: &mut I) -> Result<Self, parity_scale_codec::Error> {
         match input
             .read_byte()
-            .map_err(|e| e.chain("Could not decode `CacheId`, failed to read variant byte"))?
+            .map_err(|e| e.chain("Could not decode `PieceCacheId`, failed to read variant byte"))?
         {
             0 => u128::decode(input)
                 .map(|ulid| PieceCacheId::Ulid(Ulid(ulid)))
-                .map_err(|e| e.chain("Could not decode `CacheId::Ulid.0`")),
-            _ => Err("Could not decode `CacheId`, variant doesn't exist".into()),
+                .map_err(|e| e.chain("Could not decode `PieceCacheId::Ulid.0`")),
+            _ => Err("Could not decode `PieceCacheId`, variant doesn't exist".into()),
         }
     }
 }
@@ -101,19 +155,6 @@ impl PieceCacheId {
     #[inline]
     pub fn new() -> Self {
         Self::Ulid(Ulid::new())
-    }
-
-    /// Derive sub IDs
-    #[inline]
-    pub fn derive_sub_ids(&self, n: usize) -> Vec<Self> {
-        match self {
-            PieceCacheId::Ulid(ulid) => {
-                let ulid = ulid.0;
-                (0..n as u128)
-                    .map(|i| PieceCacheId::Ulid(Ulid(ulid + i)))
-                    .collect()
-            }
-        }
     }
 }
 
@@ -460,6 +501,62 @@ impl HandlerId for event_listener_primitives::HandlerId {
     }
 }
 
+/// An identifier for a farmer, can be used for in logs, thread names, etc.
+#[derive(
+    Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Serialize, Deserialize, Display, From,
+)]
+#[serde(untagged)]
+pub enum FarmerId {
+    /// Farmer ID
+    Ulid(Ulid),
+}
+
+impl Encode for FarmerId {
+    #[inline]
+    fn size_hint(&self) -> usize {
+        1_usize
+            + match self {
+                FarmerId::Ulid(ulid) => 0_usize.saturating_add(Encode::size_hint(&ulid.0)),
+            }
+    }
+
+    #[inline]
+    fn encode_to<O: Output + ?Sized>(&self, output: &mut O) {
+        match self {
+            FarmerId::Ulid(ulid) => {
+                output.push_byte(0);
+                Encode::encode_to(&ulid.0, output);
+            }
+        }
+    }
+}
+
+impl EncodeLike for FarmerId {}
+
+impl Decode for FarmerId {
+    #[inline]
+    fn decode<I: Input>(input: &mut I) -> Result<Self, parity_scale_codec::Error> {
+        match input
+            .read_byte()
+            .map_err(|e| e.chain("Could not decode `FarmerId`, failed to read variant byte"))?
+        {
+            0 => u128::decode(input)
+                .map(|ulid| FarmerId::Ulid(Ulid(ulid)))
+                .map_err(|e| e.chain("Could not decode `FarmerId::Ulid.0`")),
+            _ => Err("Could not decode `FarmerId`, variant doesn't exist".into()),
+        }
+    }
+}
+
+#[allow(clippy::new_without_default)]
+impl FarmerId {
+    /// Creates new ID
+    #[inline]
+    pub fn new() -> Self {
+        Self::Ulid(Ulid::new())
+    }
+}
+
 /// An identifier for a farm, can be used for in logs, thread names, etc.
 #[derive(
     Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Serialize, Deserialize, Display, From,
@@ -513,19 +610,6 @@ impl FarmId {
     #[inline]
     pub fn new() -> Self {
         Self::Ulid(Ulid::new())
-    }
-
-    /// Derive sub IDs
-    #[inline]
-    pub fn derive_sub_ids(&self, n: usize) -> Vec<Self> {
-        match self {
-            FarmId::Ulid(ulid) => {
-                let ulid = ulid.0;
-                (0..n as u128)
-                    .map(|i| FarmId::Ulid(Ulid(ulid + i)))
-                    .collect()
-            }
-        }
     }
 }
 

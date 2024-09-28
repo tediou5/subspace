@@ -12,7 +12,7 @@ use crate::cluster::nats_client::{
     GenericBroadcast, GenericRequest, GenericStreamRequest, NatsClient, StreamRequest,
 };
 use crate::farm::{
-    Farm, FarmError, FarmId, FarmingNotification, HandlerFn, HandlerId, PieceReader,
+    Farm, FarmError, FarmId, FarmerId, FarmingNotification, HandlerFn, HandlerId, PieceReader,
     PlottedSectors, SectorUpdate,
 };
 use crate::utils::AsyncJoinOnDrop;
@@ -45,9 +45,7 @@ type Handler<A> = Bag<HandlerFn<A>, A>;
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct ClusterFarmerIdentifyBroadcast {
     /// Farmer ID
-    pub farmer_id: FarmId,
-    /// Number of farms
-    pub farms_count: FarmIndex,
+    pub farmer_id: FarmerId,
     /// Farmer fingerprint changes when something about internal farm changes (like allocated space)
     pub fingerprint: Blake3Hash,
 }
@@ -68,23 +66,10 @@ impl GenericStreamRequest for ClusterFarmerFarmDetailsRequest {
 /// Farm details
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct ClusterFarmerFarmDetails {
-    /// Total number of sectors in the farm
-    pub total_sectors_count: SectorIndex,
-}
-
-/// Broadcast with identification details by farmers
-#[derive(Debug, Clone, Encode, Decode)]
-pub struct ClusterFarmerIdentifyFarmBroadcast {
     /// Farm ID
     pub farm_id: FarmId,
     /// Total number of sectors in the farm
     pub total_sectors_count: SectorIndex,
-    /// Farm fingerprint changes when something about farm changes (like allocated space)
-    pub fingerprint: Blake3Hash,
-}
-
-impl GenericBroadcast for ClusterFarmerIdentifyFarmBroadcast {
-    const SUBJECT: &'static str = "subspace.farmer.*.identify";
 }
 
 /// Broadcast with sector updates by farmers
@@ -390,16 +375,15 @@ pub fn farmer_service<F>(
 where
     F: Farm,
 {
-    let farmer_id = FarmId::new();
+    let farmer_id = FarmerId::new();
     let farmer_id_string = farmer_id.to_string();
-    let farm_ids = farmer_id.derive_sub_ids(farms.len());
 
     // For each farm start forwarding notifications as broadcast messages and create farm details
     // that can be used to respond to incoming requests
     let farms_details = farms
         .iter()
-        .zip(farm_ids)
-        .map(|(farm, farm_id)| {
+        .map(|(farm)| {
+            let farm_id = *farm.id();
             let nats_client = nats_client.clone();
 
             let background_tasks = if primary_instance {
@@ -556,7 +540,7 @@ where
 /// broadcast in response, also send periodic notifications reminding that farm exists
 async fn identify_responder(
     nats_client: &NatsClient,
-    farmer_id: FarmId,
+    farmer_id: FarmerId,
     farmer_id_string: &str,
     farms_details: &[FarmDetails],
     identification_broadcast_interval: Duration,
@@ -618,7 +602,7 @@ async fn identify_responder(
 
 async fn send_identify_broadcast(
     nats_client: &NatsClient,
-    farmer_id: FarmId,
+    farmer_id: FarmerId,
     farmer_id_string: &str,
     farms_details: &[FarmDetails],
 ) {
@@ -639,7 +623,7 @@ async fn send_identify_broadcast(
 }
 
 fn new_identify_message(
-    farmer_id: FarmId,
+    farmer_id: FarmerId,
     farms_details: &[FarmDetails],
 ) -> ClusterFarmerIdentifyBroadcast {
     let farmer_id_bytes = farmer_id.encode();
@@ -656,7 +640,6 @@ fn new_identify_message(
 
     ClusterFarmerIdentifyBroadcast {
         farmer_id,
-        farms_count: farms_details.len() as u16,
         fingerprint,
     }
 }
@@ -715,6 +698,7 @@ async fn process_farms_details_request(
 
     let stream = Box::new(stream::iter(farms_details.iter().map(|farm_details| {
         ClusterFarmerFarmDetails {
+            farm_id: farm_details.farm_id,
             total_sectors_count: farm_details.total_sectors_count,
         }
     })));
