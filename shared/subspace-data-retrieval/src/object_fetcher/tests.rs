@@ -347,7 +347,7 @@ fn create_mapping(
                 start_piece_index: {start_piece_index}, \
                 pieces_len: {pieces_len}, \
                 original_len: {original_len}, \
-                raw_data: {} ",
+                raw_data: {}",
                 raw_data_after_segment_header.len(),
                 raw_data.len(),
             );

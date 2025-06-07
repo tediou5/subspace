@@ -782,7 +782,7 @@ where
     ) -> Result<Vec<Option<SegmentHeader>>, Error> {
         if segment_indexes.len() > MAX_SEGMENT_HEADERS_PER_REQUEST {
             error!(
-                "segment_indexes length exceed the limit: {} ",
+                "segment_indexes length exceed the limit: {}",
                 segment_indexes.len()
             );
 
@@ -800,12 +800,12 @@ where
     async fn last_segment_headers(&self, limit: u32) -> Result<Vec<Option<SegmentHeader>>, Error> {
         if limit as usize > MAX_SEGMENT_HEADERS_PER_REQUEST {
             error!(
-                "Request limit ({}) exceed the server limit: {} ",
+                "Request limit ({}) exceed the server limit: {}",
                 limit, MAX_SEGMENT_HEADERS_PER_REQUEST
             );
 
             return Err(Error::StringError(format!(
-                "Request limit ({limit}) exceed the server limit: {MAX_SEGMENT_HEADERS_PER_REQUEST} "
+                "Request limit ({limit}) exceed the server limit: {MAX_SEGMENT_HEADERS_PER_REQUEST}"
             )));
         };
 
@@ -868,13 +868,13 @@ where
 
         if hashes.len() > MAX_OBJECT_HASHES_PER_SUBSCRIPTION {
             error!(
-                "Request hash count ({}) exceed the server limit: {} ",
+                "Request hash count ({}) exceed the server limit: {}",
                 hashes.len(),
                 MAX_OBJECT_HASHES_PER_SUBSCRIPTION
             );
 
             let err_fut = pending.reject(Error::StringError(format!(
-                "Request hash count ({}) exceed the server limit: {} ",
+                "Request hash count ({}) exceed the server limit: {}",
                 hashes.len(),
                 MAX_OBJECT_HASHES_PER_SUBSCRIPTION
             )));

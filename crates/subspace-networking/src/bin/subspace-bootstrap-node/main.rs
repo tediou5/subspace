@@ -136,10 +136,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             external_addresses,
             prometheus_listen_on,
         } => {
-            debug!(
-                "Libp2p protocol stack instantiated with version: {} ",
-                protocol_version
-            );
+            debug!("Libp2p protocol stack instantiated with version: {protocol_version}");
 
             let decoded_keypair = Keypair::try_from_bytes(hex::decode(keypair)?.as_mut_slice())?;
             let keypair = identity::Keypair::from(decoded_keypair);

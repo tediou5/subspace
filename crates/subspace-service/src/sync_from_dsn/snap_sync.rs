@@ -188,8 +188,7 @@ where
                    %target_block,
 
                     "Specified target block is greater than the last archived block. \
-                     Choosing the last archived block (#{}) as target block...
-                    ",
+                     Choosing the last archived block (#{}) as target block...",
                     segment_header.last_archived_block().number
                 );
                 target_block_exceeded_last_archived_block = true;
